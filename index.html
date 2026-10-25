@@ -72,7 +72,7 @@ const FINALE_AT = 5; // mind-melt matches needed (also enforced in the database)
 const NAMES = { muhib: 'Muhib', sara: 'Sara' };
 const GAMES = [
   ['Chaos Courier', 'Muhib steers, Sara shields', 'cc'], ['Mind-Melt', 'Answer together, reveal together', 1],
-  ['Orbital Duel', 'Star-grabbing arena'], ['Invisible Blueprint', 'Describe it, rebuild it'],
+  ['Orbital Duel', 'Race for the stars', 'od'], ['Invisible Blueprint', 'Describe it, rebuild it'],
   ['Panic Button Orchestra', 'Chaotic rhythm'], ['Time-Thief Heist', 'Escape-room puzzles'],
   ['Pixel Heart Heist', 'Memory showdown'], ['The Last Star', 'Final boss']];
 
@@ -129,6 +129,7 @@ async function enter() {
   if (error) { await S.sb.auth.signOut(); return auth('This account is not on the guest list for this universe.'); }
   S.room = data.room_id; S.me = data.player;
   connect(); await load(); S.view = 'lobby'; render();
+  clearInterval(S.hb); S.hb = setInterval(() => S.sb.rpc('touch_room'), 30000);
 }
 
 function connect() {
@@ -139,6 +140,7 @@ function connect() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_answers' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_rounds' }, refresh)
     .on('broadcast', { event: 'cc' }, ({ payload }) => ccMsg(payload))
+    .on('broadcast', { event: 'od' }, ({ payload }) => odMsg(payload))
     .subscribe(st => { if (st === 'SUBSCRIBED') S.ch.track({ at: Date.now() }); });
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.room) load().then(render); });
@@ -153,7 +155,7 @@ async function load() {
   if (S.round) { const a = await S.sb.from('mm_answers').select('user_id,choice').eq('round_id', S.round.id); S.ans = a.data || []; }
 }
 
-const render = () => { if (!S.room || S.view === 'fin' || S.view === 'cc') return; S.view === 'mm' ? mindMelt() : lobby(); };
+const render = () => { if (!S.room || S.view === 'fin' || S.view === 'cc' || S.view === 'od') return; S.view === 'mm' ? mindMelt() : lobby(); };
 
 function avatar(p) {
   return h('div', { class: 'who' + (S.online.has(p) ? ' on' : '') },
@@ -176,9 +178,9 @@ function lobby() {
       unlocked ? h('button', { class: 'btn', on: { click: () => { S.view = 'fin'; finale(); } } }, 'Open the finale') : null),
     h('div', { class: 'grid' }, GAMES.map(([n, d, live]) => h('button', {
       class: 'portal' + (live ? ' live' : ''), 'aria-disabled': live ? 'false' : 'true',
-      on: { click: () => { if (live === 'cc') ccScreen(); else if (live) { S.view = 'mm'; render(); } } } },
+      on: { click: () => { if (live === 'cc') ccScreen(); else if (live === 'od') odScreen(); else if (live) { S.view = 'mm'; render(); } } } },
       h('strong', {}, n), h('span', {}, live ? d : 'Not built yet')))),
-    h('div', { class: 'top' }, h('button', { class: 'ghost', on: { click: async () => { await S.sb.auth.signOut(); location.reload(); } } }, 'Sign out')));
+    h('div', { class: 'top' }, h('button', { class: 'ghost', on: { click: async () => { clearInterval(S.hb); await S.sb.rpc('leave_room'); await S.sb.auth.signOut(); location.reload(); } } }, 'Sign out')));
 }
 
 async function newRound() {
@@ -312,6 +314,111 @@ function ccDraw() {
   g.fillStyle = '#ffffff22'; g.fillRect(10, 8, 280, 8); g.fillStyle = '#ff9ad5'; g.fillRect(10, 8, 280 * Math.max(0, s.e) / 100, 8);
   g.fillStyle = '#7ee7ff'; g.fillRect(10, 20, 280 * Math.min(1, s.d / CC.GOAL), 4);
   if (!c.host) { g.fillStyle = '#ffffff22'; g.fillRect(10, Hh - 14, 280, 6); g.fillStyle = '#7ee7ff'; g.fillRect(10, Hh - 14, 280 * s.m / 100, 6); }
+}
+
+// ---------- ORBITAL DUEL ----------
+// Muhib's phone simulates both ships; Sara sends her touch target and dash presses.
+let od = null;
+function odStop() { if (od) { cancelAnimationFrame(od.raf); od = null; } }
+function odScreen(msg) {
+  odStop(); S.view = 'od';
+  const host = S.me === 'muhib';
+  const back = h('button', { class: 'ghost', on: { click: () => { odStop(); S.view = 'lobby'; lobby(); } } }, '‹ Back to the universe');
+  const cv = h('canvas', { width: 300, height: 420, class: 'ccv', 'aria-label': 'Orbital Duel arena' });
+  const note = h('p', { class: 'mut', style: 'text-align:center;min-height:3em' }, msg || 'Touch and drag in the arena to fly. Grab more stars than your partner. Red orbs stun you. Dash has a 3 second cooldown.');
+  const dash = h('button', { class: 'btn', style: 'max-width:none;min-height:60px;touch-action:none', on: { pointerdown: e => { e.preventDefault(); odDash(); } } }, 'Dash');
+  const start = host ? h('button', { class: 'btn', on: { click: odStart } }, 'Launch') : null;
+  show(back, h('div', { style: 'display:flex;flex-direction:column;align-items:center;gap:10px;padding-top:8px' }, cv, note, dash, start));
+  od = { cv, note, start, host, raf: 0, sim: null, st: null, run: false, tx: 150, ty: 300, sent: 0 };
+  const mv = e => { const r = cv.getBoundingClientRect(); od.tx = (e.clientX - r.left) / r.width * 300; od.ty = (e.clientY - r.top) / r.height * 420; odInput(); };
+  cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); mv(e); });
+  cv.addEventListener('pointermove', e => { if (e.buttons) mv(e); });
+  odDraw();
+}
+function odInput() {
+  if (!od || !od.run) return;
+  if (od.host) { od.sim.m.tx = od.tx; od.sim.m.ty = od.ty; return; }
+  const n = performance.now(); if (n - od.sent < 50) return; od.sent = n;
+  S.ch.send({ type: 'broadcast', event: 'od', payload: { k: 'in', x: od.tx, y: od.ty } });
+}
+function odDash() {
+  if (!od || !od.run) return;
+  if (od.host) od.sim.m.dreq = true; else S.ch.send({ type: 'broadcast', event: 'od', payload: { k: 'dash' } });
+}
+function odStart() {
+  if (!S.online.has('sara')) { od.note.textContent = 'Sara is not online yet. Ask her to open the app.'; return; }
+  const sh = (x, y) => ({ x, y, tx: x, ty: y, sc: 0, cd: 0, dash: 0, stun: 0, dreq: false });
+  od.sim = { m: sh(75, 380), s: sh(225, 380), stars: [], orbs: [{ x: 60, y: 100, vx: 70, vy: 55 }, { x: 240, y: 200, vx: -60, vy: 80 }, { x: 150, y: 300, vx: 90, vy: -50 }],
+    t: 45, last: performance.now(), snap: 0, id: crypto.randomUUID() };
+  od.run = true; od.start.hidden = true; od.note.textContent = 'Go!';
+  S.ch.send({ type: 'broadcast', event: 'od', payload: { k: 'start' } });
+  od.raf = requestAnimationFrame(odTick);
+}
+function odTick(t) {
+  const c = od; if (!c || !c.run) return;
+  const s = c.sim, dt = Math.min(.05, (t - s.last) / 1000); s.last = t; s.t -= dt;
+  for (const o of [s.m, s.s]) {
+    o.cd = Math.max(0, o.cd - dt); o.dash = Math.max(0, o.dash - dt); o.stun = Math.max(0, o.stun - dt);
+    if (o.dreq && o.cd === 0 && o.stun === 0) { o.dash = .15; o.cd = 3; }
+    o.dreq = false;
+    if (o.stun === 0) {
+      const dx = o.tx - o.x, dy = o.ty - o.y, d = Math.hypot(dx, dy) || 1, sp = (o.dash > 0 ? 420 : 130) * dt;
+      if (d > 4) { const k = Math.min(sp, d) / d; o.x += dx * k; o.y += dy * k; }
+    }
+    for (const st of s.stars) if (Math.hypot(st.x - o.x, st.y - o.y) < 18) { st.x = -99; o.sc++; }
+    if (o.stun === 0) for (const b of s.orbs) if (Math.hypot(b.x - o.x, b.y - o.y) < 20) { o.stun = 1; o.sc = Math.max(0, o.sc - 1); break; }
+  }
+  s.stars = s.stars.filter(q => q.x > 0);
+  while (s.stars.length < 3) s.stars.push({ x: 20 + Math.random() * 260, y: 40 + Math.random() * 340 });
+  for (const b of s.orbs) { b.x += b.vx * dt; b.y += b.vy * dt; if (b.x < 10 || b.x > 290) b.vx *= -1; if (b.y < 30 || b.y > 410) b.vy *= -1; }
+  if ((s.snap -= dt) <= 0) {
+    s.snap = .08;
+    const sp = o => [Math.round(o.x), Math.round(o.y), o.sc, +o.cd.toFixed(1), o.stun > 0 ? 1 : 0];
+    S.ch.send({ type: 'broadcast', event: 'od', payload: { k: 's', t: s.t, m: sp(s.m), s: sp(s.s), st: s.stars.map(q => [Math.round(q.x), Math.round(q.y)]), o: s.orbs.map(b => [Math.round(b.x), Math.round(b.y)]) } });
+  }
+  odDraw();
+  if (s.t <= 0) return odEnd();
+  c.raf = requestAnimationFrame(odTick);
+}
+async function odEnd() {
+  const s = od.sim, ms = s.m.sc, ss = s.s.sc;
+  S.ch.send({ type: 'broadcast', event: 'od', payload: { k: 'end', ms, ss } });
+  odResult(ms, ss);
+  const { error } = await S.sb.rpc('od_finish', { rid: s.id, r: S.room, ms, ss });
+  if (error && od) od.note.textContent += ' (Could not save the result.)';
+}
+function odResult(ms, ss) {
+  if (!od) return; od.run = false;
+  od.note.textContent = (ms === ss ? 'A tie. Suspiciously romantic.' : (ms > ss ? 'Muhib wins' : 'Sara wins') + '. The loser gets to demand a rematch.') + ' Final: Muhib ' + ms + ' – ' + ss + ' Sara.';
+  if (od.start) { od.start.hidden = false; od.start.textContent = 'Rematch'; }
+}
+function odMsg(p) {
+  if (!p) return;
+  if (S.me === 'muhib') {
+    if (!od || !od.run) return;
+    if (p.k === 'in') { od.sim.s.tx = Math.max(0, Math.min(300, +p.x || 0)); od.sim.s.ty = Math.max(0, Math.min(420, +p.y || 0)); }
+    else if (p.k === 'dash') od.sim.s.dreq = true;
+    return;
+  }
+  if (p.k === 'start') { if (!od || S.view !== 'od') odScreen(); od.run = true; od.st = null; od.note.textContent = 'Go!'; }
+  else if (p.k === 's' && od) { od.run = true; od.st = p; odDraw(); }
+  else if (p.k === 'end') odResult(p.ms, p.ss);
+}
+function odDraw() {
+  const c = od; if (!c) return;
+  const g = c.cv.getContext('2d'); g.fillStyle = '#070a22'; g.fillRect(0, 0, 300, 420);
+  let v = null;
+  if (c.host && c.sim) { const s = c.sim, sp = o => [o.x, o.y, o.sc, o.cd, o.stun > 0 ? 1 : 0]; v = { t: s.t, m: sp(s.m), s: sp(s.s), st: s.stars.map(q => [q.x, q.y]), o: s.orbs.map(b => [b.x, b.y]) }; }
+  else if (c.st) v = c.st;
+  if (!v) return;
+  g.fillStyle = '#ffe58a'; for (const [x, y] of v.st) { g.beginPath(); g.arc(x, y, 7, 0, 7); g.fill(); }
+  g.fillStyle = '#ff5c7a'; for (const [x, y] of v.o) { g.beginPath(); g.arc(x, y, 14, 0, 7); g.fill(); }
+  [[v.m, '#7ee7ff'], [v.s, '#ff9ad5']].forEach(([p, col]) => {
+    g.globalAlpha = p[4] ? .35 : 1; g.fillStyle = col; g.beginPath(); g.arc(p[0], p[1], 11, 0, 7); g.fill(); g.globalAlpha = 1;
+  });
+  g.fillStyle = '#eef0ff'; g.font = '14px system-ui'; g.fillText('Muhib ' + v.m[2], 10, 18); g.textAlign = 'right'; g.fillText('Sara ' + v.s[2], 290, 18);
+  g.textAlign = 'center'; g.fillText(Math.max(0, Math.ceil(v.t)) + 's', 150, 18); g.textAlign = 'left';
+  const me = c.host ? v.m : v.s; g.fillStyle = '#ffffff22'; g.fillRect(10, 408, 280, 5); g.fillStyle = '#7ee7ff'; g.fillRect(10, 408, 280 * (1 - me[3] / 3), 5);
 }
 
 async function finale() {
