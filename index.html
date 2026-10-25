@@ -49,6 +49,16 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--cy);outline-off
 .rev div+div{animation-delay:.5s}.rev small{color:var(--mut);display:block}
 @keyframes flip{from{transform:rotateY(90deg);opacity:0}}
 .match{text-align:center;font:1.3rem Georgia,serif;color:var(--pink)}
+.ccv{width:100%;max-width:300px;aspect-ratio:300/420;border-radius:18px;background:#070a22;border:1px solid #ffffff30;touch-action:none}
+.cc2{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%}.cc2 .btn,#shb{max-width:none;min-height:64px;touch-action:none;user-select:none}
+.orbit{position:relative;width:200px;height:200px;display:grid;place-items:center}
+.os{position:absolute;left:calc(50% - 5px);top:calc(50% - 5px);width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 0 14px var(--pink),0 0 30px var(--vio);animation:orb 12s linear infinite;animation-delay:calc(var(--i)*-1.5s)}
+@keyframes orb{from{transform:rotate(0) translateX(90px)}to{transform:rotate(360deg) translateX(90px)}}
+.bd{font-size:1.8rem;font-style:italic;animation:fade 3s both}
+.para{font-family:Georgia,serif;margin:0 0 .9em;animation:fade 2s both}
+.letter{background:#fff8f0;color:#2b2140;border-radius:18px;padding:22px;text-align:left;font-family:Georgia,serif;box-shadow:0 0 40px #ff9ad566;animation:fade 2s both}
+.letter p{margin:0 0 .8em}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}}
 @media (prefers-reduced-motion:reduce){*,body::before{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -58,9 +68,10 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--cy);outline-off
 <script>
 // ---- CONFIG: paste your Supabase project URL and publishable (anon) key. Never put a service-role key here.
 const CFG = { url: 'https://qhgcntxcnugeyadkcdkg.supabase.co', key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ2NudHhjbnVnZXlhZGtjZGtnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI5NDUzNDEsImV4cCI6MjEwODUyMTM0MX0.GfbR7NBA93_4GWzixjmwLD3GllRRAVIttZExosEKElE' };
+const FINALE_AT = 5; // mind-melt matches needed (also enforced in the database)
 const NAMES = { muhib: 'Muhib', sara: 'Sara' };
 const GAMES = [
-  ['Chaos Courier', 'Co-op spaceship relay'], ['Mind-Melt', 'Answer together, reveal together', 1],
+  ['Chaos Courier', 'Muhib steers, Sara shields', 'cc'], ['Mind-Melt', 'Answer together, reveal together', 1],
   ['Orbital Duel', 'Star-grabbing arena'], ['Invisible Blueprint', 'Describe it, rebuild it'],
   ['Panic Button Orchestra', 'Chaotic rhythm'], ['Time-Thief Heist', 'Escape-room puzzles'],
   ['Pixel Heart Heist', 'Memory showdown'], ['The Last Star', 'Final boss']];
@@ -127,6 +138,7 @@ function connect() {
     .on('presence', { event: 'sync' }, () => { S.online = new Set(Object.keys(S.ch.presenceState())); render(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_answers' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_rounds' }, refresh)
+    .on('broadcast', { event: 'cc' }, ({ payload }) => ccMsg(payload))
     .subscribe(st => { if (st === 'SUBSCRIBED') S.ch.track({ at: Date.now() }); });
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.room) load().then(render); });
@@ -141,7 +153,7 @@ async function load() {
   if (S.round) { const a = await S.sb.from('mm_answers').select('user_id,choice').eq('round_id', S.round.id); S.ans = a.data || []; }
 }
 
-const render = () => { if (!S.room) return; S.view === 'mm' ? mindMelt() : lobby(); };
+const render = () => { if (!S.room || S.view === 'fin' || S.view === 'cc') return; S.view === 'mm' ? mindMelt() : lobby(); };
 
 function avatar(p) {
   return h('div', { class: 'who' + (S.online.has(p) ? ' on' : '') },
@@ -152,15 +164,19 @@ function avatar(p) {
 function lobby() {
   const other = S.me === 'muhib' ? 'sara' : 'muhib';
   const both = S.online.has('muhib') && S.online.has('sara');
+  const mm = S.score.matches || 0, unlocked = mm >= FINALE_AT;
   show(
     h('div', { class: 'top' }, avatar(S.me), h('i', { class: 'thread' }), avatar(other)),
     h('p', { class: 'mut', style: 'text-align:center' }, both ? 'The universe is complete.' : 'Your favourite human hasn’t arrived yet…'),
     h('div', { class: 'card score' },
       h('div', {}, h('b', {}, String(S.score.matches || 0)), 'mind-melts'),
       h('div', {}, h('b', {}, String(S.score.rounds || 0)), 'rounds played')),
+    h('div', { class: 'card', style: 'margin-bottom:12px;text-align:center' },
+      h('p', { class: 'mut', style: 'margin-bottom:8px' }, unlocked ? 'The birthday finale is unlocked.' : 'Birthday finale unlocks at ' + FINALE_AT + ' mind-melts (' + mm + '/' + FINALE_AT + ')'),
+      unlocked ? h('button', { class: 'btn', on: { click: () => { S.view = 'fin'; finale(); } } }, 'Open the finale') : null),
     h('div', { class: 'grid' }, GAMES.map(([n, d, live]) => h('button', {
       class: 'portal' + (live ? ' live' : ''), 'aria-disabled': live ? 'false' : 'true',
-      on: { click: () => { if (live) { S.view = 'mm'; render(); } } } },
+      on: { click: () => { if (live === 'cc') ccScreen(); else if (live) { S.view = 'mm'; render(); } } } },
       h('strong', {}, n), h('span', {}, live ? d : 'Not built yet')))),
     h('div', { class: 'top' }, h('button', { class: 'ghost', on: { click: async () => { await S.sb.auth.signOut(); location.reload(); } } }, 'Sign out')));
 }
@@ -192,6 +208,136 @@ function mindMelt() {
       h('p', { class: 'mut' }, 'Waiting for your partner to lock in…'));
   } else opts.forEach((o, i) => kids.push(h('button', { class: 'opt', on: { click: () => answer(i) } }, o)));
   show(...kids);
+}
+
+// ---------- CHAOS COURIER ----------
+// Muhib's phone runs the simulation (host), Sara's phone sends shield input and renders snapshots.
+const CC = { H: .85, GOAL: 1000 };
+let cc = null;
+function ccStop() {
+  if (!cc) return;
+  cancelAnimationFrame(cc.raf); removeEventListener('keydown', cc.kd); removeEventListener('keyup', cc.ku); cc = null;
+}
+function ccScreen(msg) {
+  ccStop(); S.view = 'cc';
+  const host = S.me === 'muhib';
+  const back = h('button', { class: 'ghost', on: { click: () => { ccStop(); S.view = 'lobby'; lobby(); } } }, '‹ Back to the universe');
+  const cv = h('canvas', { width: 300, height: 420, class: 'ccv', 'aria-label': 'Chaos Courier game' });
+  const note = h('p', { class: 'mut', style: 'text-align:center;min-height:3em' }, msg || (host
+    ? 'You steer and can see asteroids. Sara sees the storms and runs the shield. Pink bar: energy. Talk to each other!'
+    : 'You see storms and hold the shield (it drains). Muhib steers and sees the asteroids. Tell him where to go!'));
+  const start = host ? h('button', { class: 'btn', on: { click: ccStart } }, 'Launch') : null;
+  const ctl = host
+    ? h('div', { class: 'cc2' }, h('button', { class: 'btn', on: { pointerdown: e => { e.preventDefault(); ccLane(-1); } } }, '‹ Left'),
+        h('button', { class: 'btn', on: { pointerdown: e => { e.preventDefault(); ccLane(1); } } }, 'Right ›'))
+    : h('button', { class: 'btn', id: 'shb', on: { pointerdown: e => { e.preventDefault(); ccShield(true); }, pointerup: () => ccShield(false), pointercancel: () => ccShield(false), pointerleave: () => ccShield(false) } }, 'Hold for shield');
+  show(back, h('div', { style: 'display:flex;flex-direction:column;align-items:center;gap:10px;padding-top:8px' }, cv, note, ctl, start));
+  cc = { cv, note, start, host, raf: 0, sim: null, st: null, run: false, shIn: false, my: false };
+  cc.kd = e => { if (host && e.key === 'ArrowLeft') ccLane(-1); else if (host && e.key === 'ArrowRight') ccLane(1); else if (!host && e.code === 'Space') { e.preventDefault(); ccShield(true); } };
+  cc.ku = e => { if (!host && e.code === 'Space') ccShield(false); };
+  addEventListener('keydown', cc.kd); addEventListener('keyup', cc.ku);
+  ccDraw();
+  S.sb.from('cc_runs').select('score,won').eq('room_id', S.room).order('score', { ascending: false }).limit(1)
+    .then(({ data }) => { if (cc && !msg && data && data[0]) note.textContent += ' Best score: ' + data[0].score + '.'; });
+}
+function ccLane(d) { if (cc && cc.run && cc.host) cc.sim.lane = Math.max(0, Math.min(2, cc.sim.lane + d)); }
+function ccShield(on) {
+  if (!cc || cc.host || cc.my === on) return;
+  cc.my = on; S.ch.send({ type: 'broadcast', event: 'cc', payload: { k: 'sh', on } });
+}
+function ccStart() {
+  if (!S.online.has('sara')) { cc.note.textContent = 'Sara is not online yet. Ask her to open the app.'; return; }
+  cc.sim = { lane: 1, e: 100, d: 0, sh: false, m: 100, o: [], sp: 1, last: performance.now(), snap: 0, id: crypto.randomUUID() };
+  cc.run = true; cc.shIn = false; cc.start.hidden = true; cc.note.textContent = 'Go!';
+  S.ch.send({ type: 'broadcast', event: 'cc', payload: { k: 'start' } });
+  cc.raf = requestAnimationFrame(ccTick);
+}
+function ccTick(t) {
+  const c = cc; if (!c || !c.run) return;
+  const s = c.sim, dt = Math.min(.05, (t - s.last) / 1000); s.last = t;
+  const v = .45 + s.d / 2200;
+  s.d += v * dt * 40;
+  if ((s.sp -= dt) <= 0) { s.sp = Math.max(.45, 1.1 - s.d / 1800); s.o.push({ t: Math.random() < .5 ? 'a' : 's', l: Math.floor(Math.random() * 3), y: -.05, hit: 0 }); }
+  s.sh = c.shIn && s.m > 0;
+  s.m = s.sh ? Math.max(0, s.m - 28 * dt) : Math.min(100, s.m + 12 * dt);
+  for (const o of s.o) {
+    o.y += v * dt;
+    if (!o.hit && o.l === s.lane && Math.abs(o.y - CC.H) < .045) { o.hit = 1; if (o.t === 'a') s.e -= 20; else if (!s.sh) s.e -= 25; }
+  }
+  s.o = s.o.filter(o => o.y < 1.1);
+  if ((s.snap -= dt) <= 0) {
+    s.snap = .1;
+    S.ch.send({ type: 'broadcast', event: 'cc', payload: { k: 's', l: s.lane, e: s.e, d: s.d, h: s.sh ? 1 : 0, m: s.m, o: s.o.map(o => [o.t, o.l, +o.y.toFixed(3)]) } });
+  }
+  ccDraw();
+  if (s.e <= 0 || s.d >= CC.GOAL) return ccEnd(s.e > 0);
+  c.raf = requestAnimationFrame(ccTick);
+}
+async function ccEnd(won) {
+  const s = cc.sim, score = won ? Math.round(s.e * 10 + 500) : Math.round(s.d);
+  S.ch.send({ type: 'broadcast', event: 'cc', payload: { k: 'end', won, score } });
+  ccResult(won, score);
+  const { error } = await S.sb.rpc('cc_finish', { rid: s.id, r: S.room, sc: score, w: won });
+  if (error && cc) cc.note.textContent += ' (Could not save the score.)';
+}
+function ccResult(won, score) {
+  if (!cc) return; cc.run = false;
+  cc.note.textContent = (won ? 'Message delivered! ' : 'The courier crashed. ') + 'Score: ' + score + '.';
+  if (cc.start) { cc.start.hidden = false; cc.start.textContent = 'Launch again'; }
+}
+function ccMsg(p) {
+  if (!p) return;
+  if (S.me === 'muhib') { if (p.k === 'sh' && cc && cc.run) cc.shIn = !!p.on; return; }
+  if (p.k === 'start') { if (!cc || S.view !== 'cc') ccScreen(); cc.run = true; cc.st = null; cc.note.textContent = 'Go! Hold the shield when a storm reaches Muhib\u2019s lane.'; }
+  else if (p.k === 's' && cc) { cc.run = true; cc.st = p; ccDraw(); }
+  else if (p.k === 'end') ccResult(p.won, p.score);
+}
+function ccDraw() {
+  const c = cc; if (!c) return;
+  const g = c.cv.getContext('2d'), W = 300, Hh = 420, s = c.host ? c.sim : c.st;
+  g.fillStyle = '#070a22'; g.fillRect(0, 0, W, Hh);
+  g.strokeStyle = '#ffffff22';
+  for (let i = 1; i < 3; i++) { g.beginPath(); g.moveTo(i * 100, 0); g.lineTo(i * 100, Hh); g.stroke(); }
+  if (!s) return;
+  const lane = c.host ? s.lane : s.l, sh = c.host ? s.sh : s.h;
+  const obs = c.host ? s.o.map(o => [o.t, o.l, o.y]) : s.o;
+  for (const [t, l, y] of obs) {
+    const py = y * Hh;
+    if (c.host && t === 'a') { g.fillStyle = '#a3a8d8'; g.beginPath(); g.arc(l * 100 + 50, py, 20, 0, 7); g.fill(); }
+    if (!c.host && t === 's') { g.fillStyle = 'rgba(126,231,255,.4)'; g.fillRect(l * 100 + 8, py - 14, 84, 28); }
+  }
+  const x = lane * 100 + 50, y = CC.H * Hh;
+  g.fillStyle = '#ff9ad5'; g.beginPath(); g.moveTo(x, y - 18); g.lineTo(x + 14, y + 14); g.lineTo(x - 14, y + 14); g.fill();
+  if (sh) { g.strokeStyle = '#7ee7ff'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 30, 0, 7); g.stroke(); g.lineWidth = 1; }
+  g.fillStyle = '#ffffff22'; g.fillRect(10, 8, 280, 8); g.fillStyle = '#ff9ad5'; g.fillRect(10, 8, 280 * Math.max(0, s.e) / 100, 8);
+  g.fillStyle = '#7ee7ff'; g.fillRect(10, 20, 280 * Math.min(1, s.d / CC.GOAL), 4);
+  if (!c.host) { g.fillStyle = '#ffffff22'; g.fillRect(10, Hh - 14, 280, 6); g.fillStyle = '#7ee7ff'; g.fillRect(10, Hh - 14, 280 * s.m / 100, 6); }
+}
+
+async function finale() {
+  show(h('div', { class: 'c' }, h('div', { class: 'star' }), h('p', { class: 'mut' }, 'Opening…')));
+  const { data, error } = await S.sb.rpc('get_finale', { r: S.room });
+  const back = () => { S.view = 'lobby'; lobby(); };
+  if (error || !data) { S.view = 'lobby'; return lobby(); }   // server refuses until the unlock condition is met
+  const orbit = h('div', { class: 'orbit' }, h('div', { class: 'av', style: 'width:64px;height:64px;font-size:1.8rem' }, 'S'),
+    [...Array(8)].map((_, i) => h('i', { class: 'os', style: '--i:' + i })));
+  const msg = h('div', {});
+  const btn = h('button', { class: 'btn', hidden: '', on: { click: () => letter(data, back) } }, 'Open your last little surprise');
+  show(h('div', { class: 'c' }, orbit, h('h1', { class: 'bd' }, 'Happy Birthday, Sara'), msg, btn,
+    h('button', { class: 'ghost', on: { click: back } }, 'Back to the universe')));
+  const paras = String(data.message).split(/\n\s*\n/);
+  paras.forEach((p, i) => setTimeout(() => { if (S.view === 'fin') msg.append(h('p', { class: 'para' }, p)); }, 2500 + i * 3500));
+  setTimeout(() => { if (S.view === 'fin') btn.hidden = false; }, 2500 + paras.length * 3500);
+}
+
+function letter(data, back) {
+  show(h('div', { style: 'padding-top:20px' },
+    h('div', { class: 'letter' }, String(data.letter).split(/\n\s*\n/).map(p => h('p', {}, p))),
+    h('div', { class: 'card', style: 'margin:16px 0;text-align:center' },
+      h('p', { class: 'mut' }, 'Your journey so far'),
+      h('p', {}, S.score.rounds + ' rounds played · ' + S.score.matches + ' mind-melts')),
+    h('div', { class: 'c', style: 'min-height:0' }, h('div', { class: 'star' }), h('p', { class: 'mut' }, 'This little universe is yours.'),
+      h('button', { class: 'btn', on: { click: back } }, 'Back to the universe'))));
 }
 
 let seen = false; try { seen = localStorage.getItem('olu_intro') === '1'; } catch (e) {}
