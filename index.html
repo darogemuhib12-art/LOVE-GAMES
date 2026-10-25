@@ -51,6 +51,12 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--cy);outline-off
 .match{text-align:center;font:1.3rem Georgia,serif;color:var(--pink)}
 .ccv{width:100%;max-width:300px;aspect-ratio:300/420;border-radius:18px;background:#070a22;border:1px solid #ffffff30;touch-action:none}
 .cc2{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%}.cc2 .btn,#shb{max-width:none;min-height:64px;touch-action:none;user-select:none}
+.bpg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;width:100%;max-width:260px;margin:10px auto}
+.bpc{aspect-ratio:1;min-height:0;border-radius:10px;border:1px solid #ffffff30;background:var(--glass);padding:0}
+button.bpc{min-height:44px}.bpc.on{background:linear-gradient(135deg,var(--pink),var(--vio));box-shadow:0 0 12px #ff9ad566}
+.bpg.sm{gap:3px}.bpg.sm .bpc{border-radius:5px}
+.toks{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.tok{min-height:44px;min-width:44px;padding:0 12px;border-radius:12px;border:1px solid #ffffff30;background:var(--glass);color:var(--tx);font:inherit}
+.clog{margin:8px 0;padding:0;list-style:none}.clog li{padding:8px 12px;margin:4px 0;border-radius:12px;background:var(--glass)}
 .orbit{position:relative;width:200px;height:200px;display:grid;place-items:center}
 .os{position:absolute;left:calc(50% - 5px);top:calc(50% - 5px);width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 0 14px var(--pink),0 0 30px var(--vio);animation:orb 12s linear infinite;animation-delay:calc(var(--i)*-1.5s)}
 @keyframes orb{from{transform:rotate(0) translateX(90px)}to{transform:rotate(360deg) translateX(90px)}}
@@ -72,7 +78,7 @@ const FINALE_AT = 5; // mind-melt matches needed (also enforced in the database)
 const NAMES = { muhib: 'Muhib', sara: 'Sara' };
 const GAMES = [
   ['Chaos Courier', 'Muhib steers, Sara shields', 'cc'], ['Mind-Melt', 'Answer together, reveal together', 1],
-  ['Orbital Duel', 'Race for the stars', 'od'], ['Invisible Blueprint', 'Describe it, rebuild it'],
+  ['Orbital Duel', 'Race for the stars', 'od'], ['Invisible Blueprint', 'Describe it, rebuild it', 'bp'],
   ['Panic Button Orchestra', 'Chaotic rhythm'], ['Time-Thief Heist', 'Escape-room puzzles'],
   ['Pixel Heart Heist', 'Memory showdown'], ['The Last Star', 'Final boss']];
 
@@ -141,6 +147,8 @@ function connect() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_rounds' }, refresh)
     .on('broadcast', { event: 'cc' }, ({ payload }) => ccMsg(payload))
     .on('broadcast', { event: 'od' }, ({ payload }) => odMsg(payload))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'bp_rounds' }, () => bpRefresh())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'bp_clues' }, () => bpRefresh())
     .subscribe(st => { if (st === 'SUBSCRIBED') S.ch.track({ at: Date.now() }); });
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.room) load().then(render); });
@@ -155,7 +163,7 @@ async function load() {
   if (S.round) { const a = await S.sb.from('mm_answers').select('user_id,choice').eq('round_id', S.round.id); S.ans = a.data || []; }
 }
 
-const render = () => { if (!S.room || S.view === 'fin' || S.view === 'cc' || S.view === 'od') return; S.view === 'mm' ? mindMelt() : lobby(); };
+const render = () => { if (!S.room || S.view === 'fin' || S.view === 'cc' || S.view === 'od' || S.view === 'bp') return; S.view === 'mm' ? mindMelt() : lobby(); };
 
 function avatar(p) {
   return h('div', { class: 'who' + (S.online.has(p) ? ' on' : '') },
@@ -178,7 +186,7 @@ function lobby() {
       unlocked ? h('button', { class: 'btn', on: { click: () => { S.view = 'fin'; finale(); } } }, 'Open the finale') : null),
     h('div', { class: 'grid' }, GAMES.map(([n, d, live]) => h('button', {
       class: 'portal' + (live ? ' live' : ''), 'aria-disabled': live ? 'false' : 'true',
-      on: { click: () => { if (live === 'cc') ccScreen(); else if (live === 'od') odScreen(); else if (live) { S.view = 'mm'; render(); } } } },
+      on: { click: () => { if (live === 'cc') ccScreen(); else if (live === 'od') odScreen(); else if (live === 'bp') bpScreen(); else if (live) { S.view = 'mm'; render(); } } } },
       h('strong', {}, n), h('span', {}, live ? d : 'Not built yet')))),
     h('div', { class: 'top' }, h('button', { class: 'ghost', on: { click: async () => { clearInterval(S.hb); await S.sb.rpc('leave_room'); await S.sb.auth.signOut(); location.reload(); } } }, 'Sign out')));
 }
@@ -314,6 +322,67 @@ function ccDraw() {
   g.fillStyle = '#ffffff22'; g.fillRect(10, 8, 280, 8); g.fillStyle = '#ff9ad5'; g.fillRect(10, 8, 280 * Math.max(0, s.e) / 100, 8);
   g.fillStyle = '#7ee7ff'; g.fillRect(10, 20, 280 * Math.min(1, s.d / CC.GOAL), 4);
   if (!c.host) { g.fillStyle = '#ffffff22'; g.fillRect(10, Hh - 14, 280, 6); g.fillStyle = '#7ee7ff'; g.fillRect(10, Hh - 14, 280 * s.m / 100, 6); }
+}
+
+// ---------- THE INVISIBLE BLUEPRINT ----------
+// The pattern is stored server-side; only the describer's account can read it (row-level security).
+const BP_WORDS = ['row', 'col', '1', '2', '3', '4', 'filled', 'empty', 'all', 'none', 'and', 'next', 'left', 'right', 'top', 'bottom'];
+let bp = null;
+async function bpLoad() {
+  const r = await S.sb.from('bp_rounds').select('*').eq('room_id', S.room).order('idx', { ascending: false }).limit(1);
+  const rd = (r.data && r.data[0]) || null;
+  let cl = [], sol = null;
+  if (rd) {
+    const [c, s] = await Promise.all([S.sb.from('bp_clues').select('n,txt').eq('round_id', rd.id).order('n'),
+      S.sb.from('bp_secrets').select('solution').eq('round_id', rd.id)]);
+    cl = c.data || []; sol = (s.data && s.data[0]) ? s.data[0].solution : null;
+  }
+  const t = await S.sb.rpc('bp_total', { r: S.room });
+  const same = bp && bp.rd && rd && bp.rd.id === rd.id;
+  bp = { rd, cl, sol, tot: t.data || { rounds: 0, total: 0 }, grid: same ? bp.grid : Array(16).fill(0), draft: same ? bp.draft : [], err: '', busy: false };
+}
+async function bpRefresh() { if (S.view === 'bp') { await bpLoad(); bpRender(); } }
+async function bpScreen() { S.view = 'bp'; bp = null; show(h('div', { class: 'c' }, h('div', { class: 'star' }))); await bpLoad(); bpRender(); }
+async function bpCall(fn, args) {
+  if (!bp || bp.busy) return; bp.busy = true;
+  const { error } = await S.sb.rpc(fn, args);
+  await bpLoad(); if (error) bp.err = error.message; bpRender();
+}
+function gridEl(str, tap, small) {
+  return h('div', { class: 'bpg' + (small ? ' sm' : '') }, [...Array(16)].map((_, i) => {
+    const on = str && str[i] === '1', cls = 'bpc' + (on ? ' on' : '');
+    return tap ? h('button', { class: cls, 'aria-pressed': String(on), 'aria-label': 'Row ' + (Math.floor(i / 4) + 1) + ' column ' + (i % 4 + 1), on: { click: () => tap(i) } })
+      : h('div', { class: cls });
+  }));
+}
+function bpRender() {
+  if (S.view !== 'bp' || !bp) return;
+  const rd = bp.rd, done = rd && rd.status === 'done', desc = rd && rd.describer_id === S.uid;
+  const back = h('button', { class: 'ghost', on: { click: () => { S.view = 'lobby'; lobby(); } } }, '‹ Back to the universe');
+  const kids = [back, h('p', { class: 'mut' }, 'Rounds done: ' + bp.tot.rounds + ' · Points: ' + bp.tot.total)];
+  const clues = h('ul', { class: 'clog' }, bp.cl.length ? bp.cl.map(c => h('li', {}, c.n + '. ' + c.txt)) : h('li', { class: 'mut' }, 'No clues yet.'));
+  if (!rd || done) {
+    if (done) kids.push(h('p', { class: 'q' }, 'Round ' + rd.idx + ': ' + rd.score + ' points'), h('p', { class: 'mut' }, 'The blueprint, then what was built'),
+      h('div', { class: 'rev' }, h('div', {}, gridEl(bp.sol, null, 1)), h('div', {}, gridEl(rd.submitted, null, 1))));
+    else kids.push(h('div', { class: 'c', style: 'min-height:40vh' }, h('h2', {}, 'The Invisible Blueprint'),
+      h('p', { class: 'mut' }, 'One of you sees a secret pattern. The other must rebuild it using only a few coded clues. Roles swap every round.')));
+    kids.push(h('button', { class: 'btn', style: 'display:block;margin:12px auto', on: { click: () => bpCall('bp_new_round', { r: S.room }) } }, done ? 'Next round' : 'Start first round'));
+  } else if (desc) {
+    const left = 8 - bp.cl.length;
+    kids.push(h('p', { class: 'q' }, 'You see the blueprint'), bp.sol ? gridEl(bp.sol, null) : h('p', { class: 'err' }, 'Could not load the blueprint.'),
+      h('p', { class: 'mut' }, 'Rows count from the top, columns from the left. Build a clue from the words below (' + left + ' clues left).'),
+      h('p', { style: 'min-height:1.6em' }, bp.draft.join(' ') || '…'),
+      h('div', { class: 'toks' }, BP_WORDS.map(w => h('button', { class: 'tok', on: { click: () => { if (bp.draft.length < 6) { bp.draft.push(w); bpRender(); } } } }, w))),
+      h('div', { class: 'cc2' }, h('button', { class: 'btn', on: { click: () => { bp.draft = []; bpRender(); } } }, 'Clear'),
+        h('button', { class: 'btn', on: { click: () => { const w = bp.draft; bp.draft = []; bpCall('bp_clue', { rid: rd.id, words: w }); } } }, 'Send clue')), clues);
+    if (!bp.draft.length || left <= 0) kids[kids.length - 2].lastChild.disabled = true;
+  } else {
+    kids.push(h('p', { class: 'q' }, 'Rebuild the blueprint'), h('p', { class: 'mut' }, 'Your partner sees the pattern. Read their clues, tap the cells to fill them, then submit.'),
+      gridEl(bp.grid.join(''), i => { bp.grid[i] ^= 1; bpRender(); }), clues,
+      h('button', { class: 'btn', style: 'display:block;margin:12px auto', on: { click: () => bpCall('bp_submit', { rid: rd.id, grid: bp.grid.join('') }) } }, 'Submit build'));
+  }
+  kids.push(h('p', { class: 'err', role: 'alert' }, bp.err));
+  show(...kids);
 }
 
 // ---------- ORBITAL DUEL ----------
